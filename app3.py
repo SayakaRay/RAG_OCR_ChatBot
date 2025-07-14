@@ -193,7 +193,9 @@ async def generate_hybrid(user_query: str, top_k: int = 10, top_rerank: int = 3,
             img = Image.open(io.BytesIO(img_binary))
             pil_images.append({"image_id": filename, "image": img})
             print(f"Loaded image from S3: {filename}")
-            img.show()  # Show image on your computer
+            
+            # Uncomment the line below to display the image
+            # img.show()  # Show image on your computer
         except Exception as e:
             print(f"Failed to load image {filename} from S3: {e}")
 
