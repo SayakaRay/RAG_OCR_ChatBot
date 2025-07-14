@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Query
+from fastapi.responses import Response
 from embeddings_2 import embed_texts, embed_queries
 from faiss_index import FaissIndex
 from openai import OpenAI
@@ -211,3 +212,19 @@ async def generate_hybrid(user_query: str, top_k: int = 10, top_rerank: int = 3,
             for i, score in sorted(zip(reranked_hybrid, rerank_scores), key=lambda x: reranked_hybrid.index(x[0]))
         ]
     }
+
+
+@app.get("/get-image-binary/{image_id}")
+async def get_image_binary(image_id: str):
+    try:
+        # ดึงรูปภาพจาก S3 เป็น binary
+        img_binary = s3_storage.get_image_binary(image_id)
+        
+        # ส่งกลับเป็น binary response
+        return Response(
+            content=img_binary,
+            media_type="image/jpeg",
+            headers={"Content-Disposition": f"inline; filename={image_id}.jpg"}
+        )
+    except Exception as e:
+        return {"error": f"Failed to get image: {str(e)}"}
