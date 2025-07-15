@@ -1,5 +1,6 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, UploadFile, File
 from fastapi.responses import Response
+from pathlib import Path
 from embeddings_2 import embed_texts, embed_queries
 from faiss_index import FaissIndex
 from openai import OpenAI
@@ -11,7 +12,9 @@ from bm25_index import BM25Retriever
 import numpy as np
 import os
 import re
-from storage import S3Storage
+from OCR.storage import S3Storage
+from OCR.main import pipeline as ocr_pipeline
+import asyncio
 from PIL import Image
 import io
 
@@ -230,3 +233,53 @@ async def get_image_binary(image_id: str):
         )
     except Exception as e:
         return {"error": f"Failed to get image: {str(e)}"}
+
+
+@app.post("/upload-file")
+async def upload_file(file: UploadFile = File(...)):
+    try:
+
+        file_extension = file.filename.split('.')[-1].lower()
+        print(file_extension)
+
+        if file_extension not in ['pdf', 'jpg', 'jpeg', 'png', 'pptx']:
+            return {"error": "Unsupported file type. Only PDF, JPG, JPEG, PNG, and PPTX are allowed."}
+
+
+        if file_extension in ['jpg', 'jpeg', 'png']:
+
+            temp_file_path = Path(f"./temp_images/temp_{file.filename}")
+            with open(temp_file_path, "wb") as f:
+                content = await file.read()
+                f.write(content)
+
+            try:
+                await ocr_pipeline(temp_file_path, file_extension)
+            except Exception as e:
+                return {"error": f"Failed to process image: {str(e)}"}
+            finally:
+                if temp_file_path.exists():
+                    os.remove(temp_file_path)
+                    print(f"Deleted temporary file: {temp_file_path}")
+
+        elif file_extension == 'pdf':
+            # บันทึกไฟล์ที่อัพโหลดมาไว้ก่อน
+            temp_file_path = Path(f"./pdf_files/temp_{file.filename}")
+            with open(temp_file_path, "wb") as f:
+                content = await file.read()
+                f.write(content)
+            
+            try:
+                # นำ Path ไปใช้กับ pipeline
+                await ocr_pipeline(temp_file_path, file_extension)
+            finally:
+                # ลบไฟล์เมื่อ pipeline จบการทำงาน ไม่ว่าจะสำเร็จหรือไม่ก็ตาม
+                if temp_file_path.exists():
+                    os.remove(temp_file_path)
+                    print(f"Deleted temporary file: {temp_file_path}")
+        elif file_extension == 'pptx':
+            print("pptx")
+
+        return {"message": "File uploaded successfully"}
+    except Exception as e:
+        return {"error": f"Failed to upload file: {str(e)}"}
