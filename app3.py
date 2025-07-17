@@ -172,7 +172,7 @@ async def generate_hybrid(user_query: str, top_k: int = 10, top_rerank: int = 3,
             {"role": "system", "content": (
                 "You are a helpful assistant. Answer this question using the following context, by providing necessary images "
                 "Image codes should be in the context only, if cannot find the image, say 'Image not found'."
-                "image code should be in the format: ![datetime-uuid](datetime-uuid). "
+                "image code should be in the format: ![Image: datetime-uuid](datetime-uuid). No file types, just the datetime-uuid. This is a pattern '\[Image:\s*([^\]]+)\]\(([^)]+)\)'"
                 "DON'T retrieve data from other sources. Also, make a pun if possible and end with an emoji."
             )},
             {"role": "user", "content": prompt}
