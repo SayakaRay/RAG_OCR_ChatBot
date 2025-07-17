@@ -43,6 +43,7 @@ def rebuild_index():
     global documents, doc_embeddings, faiss_index, bm25
     if not TEXT_PATH.exists():
         return False
+    print(f"⌛ Start Rebuilding index from {TEXT_PATH}...")
     with open(TEXT_PATH, "r", encoding="utf-8") as f:
         big_text = f.read()
 
@@ -58,26 +59,53 @@ def rebuild_index():
 
 @app.post("/upload")
 async def upload(file: UploadFile = File(...)):
-    extension = file.filename.split(".")[-1].lower()
-    if extension not in ["pdf", "jpg", "jpeg", "png"]:
-        return {"error": "Invalid file type."}
-
-    temp_path = Path(f"./temp/{file.filename}")
-    temp_path.parent.mkdir(exist_ok=True)
-    with open(temp_path, "wb") as f:
-        content = await file.read()
-        f.write(content)
-
     try:
-        await ocr_pipeline(temp_path, extension)
-        os.remove(temp_path)
-    except Exception as e:
-        return {"error": f"OCR failed: {str(e)}"}
+        file_extension = file.filename.split('.')[-1].lower()
+        print(f"Uploading file with extension: {file_extension}")
 
-    if rebuild_index():
-        return {"message": "File uploaded, OCR complete, index rebuilt."}
-    else:
-        return {"error": "Failed to rebuild index."}
+        if file_extension not in ['pdf', 'jpg', 'jpeg', 'png']:
+            return {"error": "Unsupported file type. Only PDF, JPG, JPEG, and PNG are allowed."}
+
+        if file_extension in ['jpg', 'jpeg', 'png']:
+            temp_file_path = Path(f"./temp_images/temp_{file.filename}")
+            with open(temp_file_path, "wb") as f:
+                content = await file.read()
+                f.write(content)
+
+            try:
+                await ocr_pipeline(temp_file_path, file_extension)
+            except Exception as e:
+                return {"error": f"OCR failed for image: {str(e)}"}
+            finally:
+                if temp_file_path.exists():
+                    os.remove(temp_file_path)
+                    print(f"Deleted image file: {temp_file_path}")
+
+        elif file_extension == 'pdf':
+            temp_file_path = Path(f"./pdf_files/temp_{file.filename}")
+            with open(temp_file_path, "wb") as f:
+                content = await file.read()
+                f.write(content)
+
+            try:
+                await ocr_pipeline(temp_file_path, file_extension)
+            except Exception as e:
+                return {"error": f"OCR failed for PDF: {str(e)}"}
+            finally:
+                if temp_file_path.exists():
+                    os.remove(temp_file_path)
+                    print(f"Deleted PDF file: {temp_file_path}")
+        elif file_extension == 'pptx':
+            print("pptx")
+
+        if rebuild_index():
+            return {"message": "File uploaded, OCR complete, index rebuilt."}
+        else:
+            return {"error": "File uploaded, but failed to rebuild index."}
+
+    except Exception as e:
+        return {"error": f"File upload failed: {str(e)}"}
+
 
 
 @app.get("/search-hybrid")
@@ -131,6 +159,7 @@ async def search_hybrid(user_query: str, top_k: int = 10, top_rerank: int = 3, a
     )
 
     answer = response.output_text.strip()
+    print(f"Generated Answer: {answer}")
     image_filenames = re.findall(r'!\[.*?\]\((.*?)\)', answer)
 
     return {
