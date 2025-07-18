@@ -6,6 +6,7 @@ from PIL import Image as PILImage
 # Fix import paths for OCR modules
 from OCR.config import Settings
 from OCR.pdf_processor import PDFProcessor
+from OCR.powerpoint_processor import PowerPointProcessor
 from OCR.image_processor import ImageProcessor
 from OCR.image_manager import ImageManager
 from OCR.storage import S3Storage
@@ -34,10 +35,10 @@ def preview_markdown_in_terminal(md_text, get_binary_fn):
         except Exception as e:
             print(f"Failed to preview image: {fname} — {e}")
 
-async def pipeline(PDF_PATH, filetype):
+async def pipeline(FILE_PATH, filetype):
 
     if filetype == "pdf":
-        pdf_proc = PDFProcessor(PDF_PATH)
+        pdf_proc = PDFProcessor(FILE_PATH)
         ocr_results = await pdf_proc.run()
 
 
@@ -65,8 +66,40 @@ async def pipeline(PDF_PATH, filetype):
 
         uploaded_ids = img_mgr.upload_folder()
         print(f"Uploaded {len(uploaded_ids)} images to S3")
+    
+    elif filetype == "pptx":
+        # print("PPTX processing is not implemented yet.")
+        pptx_proc = PowerPointProcessor(FILE_PATH)
+        ocr_results = await pptx_proc.run()
+
+
+        storage = S3Storage(Settings.AWS_ACCESS, Settings.AWS_SECRET,
+                            Settings.AWS_BUCKET, Settings.AWS_REGION)
+        img_mgr  = ImageManager(storage)
+
+        full_md = []
+        for resp in ocr_results:
+            for page in resp["pages"]:
+                md = page["markdown"]
+                img_tags = re.findall(r'!\[img-\d+\.jpeg\]\(img-\d+\.jpeg\)', md)
+                for idx, (img, old_tag) in enumerate(zip(page["images"], img_tags)):
+                    local_path = img_mgr.save_local(img["image_base64"])
+                    annotation = json.loads(img["image_annotation"])
+                    description = annotation["description"]
+
+                    new_tag = f"![Image: {local_path.name}]({local_path.name}){description}"
+                    md = md.replace(old_tag, new_tag)
+                full_md.append(md)
+
+        output_path = Path(__file__).parent.parent / "text_document" / "all_pdf.txt"
+        output_path.write_text("\n\n".join(full_md), encoding="utf-8")
+
+
+        uploaded_ids = img_mgr.upload_folder()
+        print(f"Uploaded {len(uploaded_ids)} images to S3")
+
     elif filetype in ['jpg', 'jpeg', 'png']:
-        img_proc = ImageProcessor(PDF_PATH)
+        img_proc = ImageProcessor(FILE_PATH)
         ocr_results = await img_proc.run()
 
         storage = S3Storage(Settings.AWS_ACCESS, Settings.AWS_SECRET,

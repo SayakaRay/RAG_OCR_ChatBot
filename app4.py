@@ -63,7 +63,7 @@ async def upload(file: UploadFile = File(...)):
         file_extension = file.filename.split('.')[-1].lower()
         print(f"Uploading file with extension: {file_extension}")
 
-        if file_extension not in ['pdf', 'jpg', 'jpeg', 'png']:
+        if file_extension not in ['pdf', 'jpg', 'jpeg', 'png', "pptx"]:
             return {"error": "Unsupported file type. Only PDF, JPG, JPEG, and PNG are allowed."}
 
         if file_extension in ['jpg', 'jpeg', 'png']:
@@ -96,7 +96,19 @@ async def upload(file: UploadFile = File(...)):
                     os.remove(temp_file_path)
                     print(f"Deleted PDF file: {temp_file_path}")
         elif file_extension == 'pptx':
-            print("pptx")
+            temp_file_path = Path(f"./pptx_files/temp_{file.filename}")
+            with open(temp_file_path, "wb") as f:
+                content = await file.read()
+                f.write(content)
+
+            try:
+                await ocr_pipeline(temp_file_path, file_extension)
+            except Exception as e:
+                return {"error": f"OCR failed for PPTX: {str(e)}"}
+            finally:
+                if temp_file_path.exists():
+                    os.remove(temp_file_path)
+                    print(f"Deleted PPTX file: {temp_file_path}")
 
         if rebuild_index():
             return {"message": "File uploaded, OCR complete, index rebuilt."}
