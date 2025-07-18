@@ -4,7 +4,24 @@ import json
 import asyncio
 from pathlib import Path
 from mistralai import Mistral
+from mistralai.extra import response_format_from_pydantic_model
 from OCR.config import Settings, PROJECT_ROOT, IMAGE_DIR
+
+
+from enum import Enum
+from pydantic import BaseModel, Field
+
+class ImageType(str, Enum):
+    GRAPH = "graph"; TEXT = "text"; TABLE = "table"; IMAGE = "image"
+
+class ImageAnnotation(BaseModel):
+    image_type : ImageType = Field(..., description="graph / text / ...")
+    description: str
+
+class DocumentAnnotation(BaseModel):
+    language: str
+    summary : str
+    authors : list[str]
 
 
 class ImageProcessor:
@@ -36,12 +53,14 @@ class ImageProcessor:
                     "type": "image_url",
                     "image_url": f"data:image/jpeg;base64,{base64_image}"
                 },
+                bbox_annotation_format=response_format_from_pydantic_model(ImageAnnotation),
+                document_annotation_format=response_format_from_pydantic_model(DocumentAnnotation),
                 include_image_base64=True
             )
             
-            result = ocr_response.pages[0].markdown
-            
-            return result
+            # Convert to same format as PDFProcessor - return as list of dict
+            data = json.loads(ocr_response.model_dump_json())
+            return [data]
             
         except Exception as e:
             print(f"OCR processing error: {e}")

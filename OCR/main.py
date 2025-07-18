@@ -69,8 +69,29 @@ async def pipeline(PDF_PATH, filetype):
         img_proc = ImageProcessor(PDF_PATH)
         ocr_results = await img_proc.run()
 
+        storage = S3Storage(Settings.AWS_ACCESS, Settings.AWS_SECRET,
+                            Settings.AWS_BUCKET, Settings.AWS_REGION)
+        img_mgr = ImageManager(storage)
+
+        full_md = []
+        for resp in ocr_results:
+            for page in resp["pages"]:
+                md = page["markdown"]
+                img_tags = re.findall(r'!\[img-\d+\.jpeg\]\(img-\d+\.jpeg\)', md)
+                for idx, (img, old_tag) in enumerate(zip(page["images"], img_tags)):
+                    local_path = img_mgr.save_local(img["image_base64"])
+                    annotation = json.loads(img["image_annotation"])
+                    description = annotation["description"]
+
+                    new_tag = f"![Image: {local_path.name}]({local_path.name}){description}"
+                    md = md.replace(old_tag, new_tag)
+                full_md.append(md)
+
         output_path = Path(__file__).parent.parent / "text_document" / "all_pdf.txt"
-        output_path.write_text(ocr_results, encoding="utf-8")
+        output_path.write_text("\n\n".join(full_md), encoding="utf-8")
+
+        uploaded_ids = img_mgr.upload_folder()
+        print(f"Uploaded {len(uploaded_ids)} images to S3")
 
     # assistant = ChatAssistant()
     # answer_md = assistant.ask("\n\n".join(full_md),
