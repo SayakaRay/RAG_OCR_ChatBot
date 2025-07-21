@@ -63,62 +63,44 @@ async def upload(file: UploadFile = File(...)):
         file_extension = file.filename.split('.')[-1].lower()
         print(f"Uploading file with extension: {file_extension}")
 
-        if file_extension not in ['pdf', 'jpg', 'jpeg', 'png', "pptx"]:
-            return {"error": "Unsupported file type. Only PDF, JPG, JPEG, and PNG are allowed."}
+        if file_extension not in ['pdf', 'jpg', 'jpeg', 'png', 'pptx']:
+            return {"error": "Unsupported file type. Only PDF, JPG, JPEG, PNG, and PPTX are allowed."}
 
-        if file_extension in ['jpg', 'jpeg', 'png']:
-            temp_file_path = Path(f"./temp_images/temp_{file.filename}")
-            with open(temp_file_path, "wb") as f:
-                content = await file.read()
-                f.write(content)
+        # Create temp path
+        temp_folder = {
+            "pdf": "./pdf_files",
+            "pptx": "./pptx_files",
+            "jpg": "./temp_images",
+            "jpeg": "./temp_images",
+            "png": "./temp_images"
+        }[file_extension]
 
-            try:
-                await ocr_pipeline(temp_file_path, file_extension)
-            except Exception as e:
-                return {"error": f"OCR failed for image: {str(e)}"}
-            finally:
-                if temp_file_path.exists():
-                    os.remove(temp_file_path)
-                    print(f"Deleted image file: {temp_file_path}")
+        os.makedirs(temp_folder, exist_ok=True)
+        temp_path = Path(temp_folder) / f"temp_{file.filename}"
 
-        elif file_extension == 'pdf':
-            temp_file_path = Path(f"./pdf_files/temp_{file.filename}")
-            with open(temp_file_path, "wb") as f:
-                content = await file.read()
-                f.write(content)
+        # Save uploaded file to temp
+        with open(temp_path, "wb") as f:
+            content = await file.read()
+            f.write(content)
 
-            try:
-                await ocr_pipeline(temp_file_path, file_extension)
-            except Exception as e:
-                return {"error": f"OCR failed for PDF: {str(e)}"}
-            finally:
-                if temp_file_path.exists():
-                    os.remove(temp_file_path)
-                    print(f"Deleted PDF file: {temp_file_path}")
-        elif file_extension == 'pptx':
-            temp_file_path = Path(f"./pptx_files/temp_{file.filename}")
-            with open(temp_file_path, "wb") as f:
-                content = await file.read()
-                f.write(content)
+        # Run OCR pipeline
+        try:
+            await ocr_pipeline(temp_path, file_extension)
+        except Exception as e:
+            return {"error": f"OCR failed: {str(e)}"}
+        finally:
+            if temp_path.exists():
+                os.remove(temp_path)
+                print(f"Deleted temp file: {temp_path}")
 
-            try:
-                await ocr_pipeline(temp_file_path, file_extension)
-            except Exception as e:
-                return {"error": f"OCR failed for PPTX: {str(e)}"}
-            finally:
-                if temp_file_path.exists():
-                    os.remove(temp_file_path)
-                    print(f"Deleted PPTX file: {temp_file_path}")
-
+        # Rebuild FAISS + BM25 index
         if rebuild_index():
-            return {"message": "File uploaded, OCR complete, index rebuilt."}
+            return {"message": f"{file.filename} uploaded, OCR complete, and index rebuilt."}
         else:
-            return {"error": "File uploaded, but failed to rebuild index."}
+            return {"error": "OCR done, but failed to rebuild index."}
 
     except Exception as e:
-        return {"error": f"File upload failed: {str(e)}"}
-
-
+        return {"error": f"Upload failed: {str(e)}"}    
 
 @app.get("/search-hybrid")
 async def search_hybrid(user_query: str, top_k: int = 10, top_rerank: int = 3, alpha: float = 0.7):
@@ -163,8 +145,8 @@ async def search_hybrid(user_query: str, top_k: int = 10, top_rerank: int = 3, a
         input=[
             {"role": "system", "content": (
                 "You are a helpful assistant. Answer this question using the following context, by providing necessary images. "
-                "Image codes should be in the format: ![Image: name](name). No file types. "
-                "If the image is not found, say 'Image not found'. End with a pun and an emoji."
+                "Image codes should be in the format: ![Image: name](name). No file types. DO NOT make up images. "
+                "If the image is not found, do not mention any images . End with a pun and an emoji."
             )},
             {"role": "user", "content": prompt}
         ],

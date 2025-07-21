@@ -11,3 +11,5 @@ mistralai
 pypdf
 matplotlib
 FlagEmbedding
+IPython
+gradio
