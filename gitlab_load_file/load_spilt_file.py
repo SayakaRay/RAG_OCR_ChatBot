@@ -6,8 +6,14 @@ import pandas as pd
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyMuPDFLoader, TextLoader, Docx2txtLoader, UnstructuredMarkdownLoader
 from langchain_community.document_loaders.csv_loader import CSVLoader
-
+from pydantic import BaseModel
+from pathlib import Path
+import sys
 #from utils.model.schemas import MetadataPinecone
+project_root = Path(__file__).resolve().parent.parent
+sys.path.append(str(project_root))
+from OCR.main import pipeline as ocr_pipeline
+from chunk_text import split_text_with_langchain
 
 class MetadataPinecone(BaseModel):
     project_id: str
@@ -17,7 +23,7 @@ class MetadataPinecone(BaseModel):
     date_upload: str
     upload_by: str
     
-def AllFileLoaderAndSplit_forSendToCountSplit(username, directory, project_id, timestamp=None):
+async def AllFileLoaderAndSplit_forSendToCountSplit(username, directory, project_id, timestamp=None):
     documents = []
 
     # Include Timestamp so all file will have the same timestamp to metadata in db. see more: /upload
@@ -68,20 +74,24 @@ def AllFileLoaderAndSplit_forSendToCountSplit(username, directory, project_id, t
                         project_id=project_id
                     ))
             elif filename.endswith(".pdf"):
-                loader = PyMuPDFLoader(os.path.join(directory, filename))
-                documents_load = text_splitter.split_documents(loader.load())
-                for doc in documents_load:
-                    page = doc.metadata.get("page", "None")
-                    if page is not None:
-                        total_page = doc.metadata.get("total_page", None)
-                        if total_page is not None:
-                            page = str(page + 1) + " / " + total_page
-                        elif total_page is None:
-                            page = str(page + 1)
+                project_root = Path(__file__).resolve().parent.parent
+                text_output_path = project_root / "text_document" / "all_pdf.txt"
+
+                await ocr_pipeline(os.path.join(directory, filename), "pdf")
+                # OCR 
+                if not text_output_path.exists():
+                    print(f"OCR failed or no text found for {filename}")
+                    continue
+
+                with open(text_output_path, "r", encoding="utf-8") as f:
+                    text = f.read()
+                documents_load = split_text_with_langchain(text, chunk_size=1024, chunk_overlap=100)
+
+                for i, chunk in enumerate(documents_load):
                     documents.append(MetadataPinecone(
                         filename=filename,
-                        page=page,
-                        text=clean(doc.page_content),
+                        page=str(i + 1),
+                        text=clean(chunk),
                         date_upload=date_upload,
                         upload_by=username,
                         project_id=project_id
