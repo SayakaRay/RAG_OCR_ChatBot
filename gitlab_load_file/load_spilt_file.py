@@ -8,6 +8,7 @@ from langchain_community.document_loaders import PyMuPDFLoader, TextLoader, Docx
 from langchain_community.document_loaders.csv_loader import CSVLoader
 
 #from utils.model.schemas import MetadataPinecone
+from pydantic import BaseModel
 
 class MetadataPinecone(BaseModel):
     project_id: str
