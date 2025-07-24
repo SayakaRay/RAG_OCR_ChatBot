@@ -77,7 +77,7 @@ async def AllFileLoaderAndSplit_forSendToCountSplit(username, directory, project
                 project_root = Path(__file__).resolve().parent.parent
                 text_output_path = project_root / "text_document" / "all_pdf.txt"
 
-                await ocr_pipeline(os.path.join(directory, filename), "pdf")
+                await ocr_pipeline(os.path.join(directory, filename), "pdf", project_id)
                 # OCR 
                 if not text_output_path.exists():
                     print(f"OCR failed or no text found for {filename}")
