@@ -23,10 +23,10 @@ class ImageManager:
         with open(path, "wb") as f: f.write(data)
         return path
 
-    def upload_folder(self, project_id: str) -> list[str]:
+    def upload_folder(self, username: str, project_id: str) -> list[str]:
         ids = []
         for p in tqdm(IMAGE_DIR.glob("*.jpg"), desc="Upload to S3"):
             image_id = p.stem
-            self.storage.upload_file(p.read_bytes(), image_id, project_id)
+            self.storage.upload_file(p.read_bytes(), image_id, username, project_id)
             ids.append(image_id)
         return ids

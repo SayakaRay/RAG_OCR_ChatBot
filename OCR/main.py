@@ -35,7 +35,7 @@ def preview_markdown_in_terminal(md_text, get_binary_fn):
         except Exception as e:
             print(f"Failed to preview image: {fname} — {e}")
 
-async def pipeline(FILE_PATH, filetype, project_id):
+async def pipeline(FILE_PATH, filetype, username, project_id):
 
     if filetype == "pdf":
         pdf_proc = PDFProcessor(FILE_PATH)
@@ -64,7 +64,7 @@ async def pipeline(FILE_PATH, filetype, project_id):
         output_path.write_text("\n\n".join(full_md), encoding="utf-8")
 
 
-        uploaded_ids = img_mgr.upload_folder(project_id)
+        uploaded_ids = img_mgr.upload_folder(username, project_id)
         print(f"Uploaded {len(uploaded_ids)} images to S3")
     
     elif filetype == "pptx":
@@ -95,7 +95,7 @@ async def pipeline(FILE_PATH, filetype, project_id):
         output_path.write_text("\n\n".join(full_md), encoding="utf-8")
 
 
-        uploaded_ids = img_mgr.upload_folder(project_id)
+        uploaded_ids = img_mgr.upload_folder(username, project_id)
         print(f"Uploaded {len(uploaded_ids)} images to S3")
 
     elif filetype in ['jpg', 'jpeg', 'png']:
@@ -123,7 +123,7 @@ async def pipeline(FILE_PATH, filetype, project_id):
         output_path = Path(__file__).parent.parent / "text_document" / "all_pdf.txt"
         output_path.write_text("\n\n".join(full_md), encoding="utf-8")
 
-        uploaded_ids = img_mgr.upload_folder(project_id)
+        uploaded_ids = img_mgr.upload_folder(username, project_id)
         print(f"Uploaded {len(uploaded_ids)} images to S3")
 
     # assistant = ChatAssistant()
