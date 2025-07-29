@@ -2,23 +2,18 @@ import os
 from datetime import datetime
 from fixthaipdf import clean
 import pytz
+import pandas as pd
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import (
-    PyMuPDFLoader,
-    TextLoader,
-    Docx2txtLoader,
-    UnstructuredMarkdownLoader,
-)
+from langchain_community.document_loaders import PyMuPDFLoader, TextLoader, Docx2txtLoader, UnstructuredMarkdownLoader
 from langchain_community.document_loaders.csv_loader import CSVLoader
 from pydantic import BaseModel
 from pathlib import Path
 import sys
-
+#from utils.model.schemas import MetadataPinecone
 project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
-
 from OCR.main import pipeline as ocr_pipeline
-from RAG_Tools.chunk_text import split_text_with_langchain
+from chunk_text import split_text_with_langchain
 
 class MetadataPinecone(BaseModel):
     project_id: str
@@ -80,7 +75,7 @@ async def AllFileLoaderAndSplit_forSendToCountSplit(username, directory, project
                     ))
             elif filename.endswith(".pdf"):
                 project_root = Path(__file__).resolve().parent.parent
-                text_output_path = project_root / "text_document" / "ocr_output.txt"
+                text_output_path = project_root / "text_document" / "all_pdf.txt"
 
                 await ocr_pipeline(os.path.join(directory, filename), "pdf", username, project_id)
                 # OCR 

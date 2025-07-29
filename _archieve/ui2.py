@@ -4,13 +4,15 @@ import re
 import base64
 from io import BytesIO
 
-# --------------------------
-# Function to get image from S3/local API
-# --------------------------
-def get_image_from_s3(image_filename):
+DEFAULT_USERNAME = "test_user"
+DEFAULT_PROJECT = "test_project"
+
+def get_image_from_s3(image_filename, username, project_id):
     try:
-        filename = image_filename.split('/')[-1].split('.')[0]  # extract name without extension
-        response = requests.get(f"http://localhost:8000/get-image-binary/{filename}", timeout=30)
+        filename = image_filename.split('/')[-1].split('.')[0]
+        url = f"http://localhost:8000/get-image-binary/{filename}"
+        params = {"username": username, "project_id": project_id}
+        response = requests.get(url, params=params, timeout=30)
         if response.status_code == 200:
             image_base64 = base64.b64encode(response.content).decode('utf-8')
             return f"data:image/jpeg;base64,{image_base64}"
@@ -19,16 +21,13 @@ def get_image_from_s3(image_filename):
         print(f"Error fetching image {image_filename}: {e}")
         return None
 
-# --------------------------
-# Replace image markdown with actual <img> tag
-# --------------------------
-def process_images_in_text(text):
+def process_images_in_text(text, username, project_id):
     image_pattern = r'!\[.*?\]\((.*?)\)'
 
     def replace_image(match):
         image_filename = match.group(1)
         try:
-            image_url = get_image_from_s3(image_filename)
+            image_url = get_image_from_s3(image_filename, username, project_id)
             if image_url:
                 return f'<img src="{image_url}" style="max-width: 400px; max-height: 300px; border-radius: 8px; margin: 10px 0;"/>'
             else:
@@ -38,10 +37,7 @@ def process_images_in_text(text):
 
     return re.sub(image_pattern, replace_image, text)
 
-# --------------------------
-# Function to handle chatbot interaction
-# --------------------------
-def chat_with_api(message, history):
+def chat_with_api(message, history, username, project_id):
     try:
         params = {
             "user_query": message,
@@ -54,7 +50,7 @@ def chat_with_api(message, history):
         if response.status_code == 200:
             result = response.json()
             reply = result.get("generated_answer", str(result))
-            reply_with_images = process_images_in_text(reply)
+            reply_with_images = process_images_in_text(reply, username, project_id)
         else:
             reply_with_images = f"API Error: {response.status_code} - {response.text}"
 
@@ -68,33 +64,51 @@ def chat_with_api(message, history):
     history.append([message, reply_with_images])
     return "", history
 
-# --------------------------
-# Optional: Upload File Handler
-# --------------------------
-def upload_file(file):
+def upload_file(file, username, project_id):
+    yield "🚀 กำลังอัปโหลดไฟล์และประมวลผล OCR..."
+
     try:
         files = {"file": (file.name, open(file.name, "rb"), "application/octet-stream")}
-        response = requests.post("http://localhost:8000/upload", files=files, timeout=60)
-        return response.json().get("message", response.text)
-    except Exception as e:
-        return f"❌ การอัปโหลดล้มเหลว: {str(e)}"
+        params = {"username": username, "project_id": project_id}
+        response = requests.post("http://localhost:8000/upload", files=files, params=params, timeout=360)
 
-# --------------------------
-# Gradio UI Layout
-# --------------------------
+        if response.status_code == 200:
+            result = response.json()
+            message = result.get("message", "✅ อัปโหลดสำเร็จ")
+        else:
+            message = f"❌ API Error: {response.status_code} - {response.text}"
+        yield message
+
+    except Exception as e:
+        yield f"❌ การอัปโหลดล้มเหลว: {str(e)}"
+
 with gr.Blocks(title="💬 Hybrid RAG Chatbot") as demo:
     gr.Markdown("# 💬 Hybrid RAG Chatbot")
     gr.Markdown("ระบบค้นหาผสม FAISS + BM25 พร้อม OCR และแสดงรูปภาพจาก S3")
 
+    with gr.Row():
+        username_input = gr.Textbox(label="👤 USERNAME", value=DEFAULT_USERNAME)
+        project_input = gr.Textbox(label="📁 PROJECT ID", value=DEFAULT_PROJECT)
+
+    upload_status = gr.Markdown()
+
+    upload_button = gr.File(label="📤 อัปโหลดไฟล์ (PDF, PPTX, JPG, PNG)", file_types=[".pdf", ".pptx", ".jpg", ".jpeg", ".png"])
     chatbot = gr.Chatbot(height=500, label="การสนทนา")
     msg = gr.Textbox(label="คำถามของคุณ", placeholder="พิมพ์คำถามที่นี่...", scale=8)
-    upload_button = gr.File(label="📤 อัปโหลดไฟล์ (PDF, PPTX, JPG, PNG)", file_types=[".pdf", ".pptx", ".jpg", ".jpeg", ".png"])
     clear = gr.Button("🧹 ล้างประวัติ")
     history_state = gr.State([])
 
-    msg.submit(chat_with_api, [msg, history_state], [msg, chatbot])
+    def respond(message, history, username, project_id):
+        return chat_with_api(message, history, username, project_id)
+
+    msg.submit(respond, [msg, history_state, username_input, project_input], [msg, chatbot])
     clear.click(lambda: ([], []), None, [history_state, chatbot])
-    upload_button.change(fn=upload_file, inputs=upload_button, outputs=None)
+
+    upload_button.change(
+        fn=upload_file,
+        inputs=[upload_button, username_input, project_input],
+        outputs=[upload_status]
+    )
 
 if __name__ == "__main__":
     demo.launch(debug=True, share=False)

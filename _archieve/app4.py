@@ -9,13 +9,12 @@ import numpy as np
 from dotenv import load_dotenv
 from openai import OpenAI
 from typing import Optional
-import tempfile
 
-from RAG_Tools.embeddings import embed_texts, embed_queries
-from RAG_Tools.faiss_index import FaissIndex
-from RAG_Tools.reranker import compute_scores
-from RAG_Tools.chunk_text import split_text_with_langchain
-from RAG_Tools.bm25_index import BM25Retriever
+from embeddings_2 import embed_texts, embed_queries
+from faiss_index import FaissIndex
+from reranker2 import compute_scores
+from chunk_text import split_text_with_langchain
+from bm25_index import BM25Retriever
 from OCR.storage import S3Storage
 from OCR.main import pipeline as ocr_pipeline
 
@@ -24,7 +23,7 @@ from OCR.main import pipeline as ocr_pipeline
 # ─────────────────────────────────────────────────────────────
 load_dotenv()
 
-TEXT_PATH = Path("./text_document/ocr_output.txt")
+TEXT_PATH = Path("./text_document/all_pdf.txt")
 client = OpenAI()
 
 app = FastAPI()
@@ -75,24 +74,33 @@ async def upload(
 ):
     try:
         print(f"📥 Uploading {file.filename} for user {username} in project {project_id}...")
-
-        file_type = Path(file.filename).suffix.lower().lstrip(".")
-        if file_type not in ["pdf", "jpg", "jpeg", "png", "pptx"]:
+        file_ext = Path(file.filename).suffix.lower().lstrip(".")
+        if file_ext not in ["pdf", "jpg", "jpeg", "png", "pptx"]:
             return {"error": "Unsupported file type. Only PDF, PPTX, JPG, JPEG, PNG allowed."}
 
-        # 🧪 Create temporary working directory
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir) / f"temp_{file.filename}"
+        temp_dir = {
+            "pdf": "./pdf_files",
+            "pptx": "./pptx_files",
+            "jpg": "./temp_images",
+            "jpeg": "./temp_images",
+            "png": "./temp_images"
+        }[file_ext]
+        os.makedirs(temp_dir, exist_ok=True)
+        temp_path = Path(temp_dir) / f"temp_{file.filename}"
 
-            # Save to disk
-            with open(temp_path, "wb") as f:
-                f.write(await file.read())
+        # Save to disk
+        with open(temp_path, "wb") as f:
+            f.write(await file.read())
 
-            # OCR Processing
-            try:
-                await ocr_pipeline(temp_path, file_type, username, project_id)
-            except Exception as e:
-                return {"error": f"OCR failed: {str(e)}"}
+        # OCR Processing
+        try:
+            await ocr_pipeline(temp_path, file_ext, username, project_id)
+        except Exception as e:
+            return {"error": f"OCR failed: {str(e)}"}
+        finally:
+            if temp_path.exists():
+                os.remove(temp_path)
+                print(f"🧹 Deleted temp file: {temp_path}")
 
         # Rebuild index
         if rebuild_index():
@@ -151,9 +159,8 @@ async def search_hybrid(
         model="gpt-4o-mini-2024-07-18",
         input=[
             {"role": "system", "content": (
-                "You are a helpful assistant. Answer this question using the following context, by providing necessary images. "
-                "Image codes should be in the format: ![Image: name](name). No file types."
-                "If the image is not found, do not mention any images. End with a pun and an emoji."
+                "You are a helpful assistant. Use the context to answer clearly. Use only provided images: "
+                "![Image: name](name). Do not guess. End with a pun and an emoji."
             )},
             {"role": "user", "content": prompt}
         ]

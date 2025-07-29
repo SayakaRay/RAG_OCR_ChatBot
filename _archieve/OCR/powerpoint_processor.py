@@ -4,7 +4,6 @@ import sys
 import subprocess
 import asyncio
 import json
-import tempfile
 from pathlib import Path
 from OCR.config import Settings
 from OCR.pdf_processor import PDFProcessor
@@ -187,7 +186,7 @@ class PowerPointProcessor:
     async def run(self):
         """
         Convert PowerPoint to PDF and then perform OCR on the resulting PDF.
-
+        
         Returns:
             list[dict]: OCR results in the same format as PDFProcessor
         """
@@ -195,32 +194,39 @@ class PowerPointProcessor:
             # Check requirements
             if not self._check_requirements():
                 return [{"error": "Required software not installed"}]
-
-            # Use TemporaryDirectory context to auto-clean temp folder
-            with tempfile.TemporaryDirectory() as temp_folder:
-                temp_folder_path = Path(temp_folder)
-
-                # Convert PPTX to PDF inside temp folder
-                pdf_path = self._convert_pptx_to_pdf(str(temp_folder_path))
-                if pdf_path is None:
-                    return [{"error": "Failed to convert PowerPoint to PDF"}]
-
-                self.temp_pdf_path = pdf_path
-
-                # Use PDFProcessor to OCR the generated PDF
-                pdf_processor = PDFProcessor(pdf_path)
-                ocr_results = await pdf_processor.run()
-
-                return ocr_results
-
+            
+            # Create temporary folder for PDF
+            temp_folder = Path.cwd() / "temp_pptx_pdf"
+            temp_folder.mkdir(exist_ok=True)
+            
+            # Convert PPTX to PDF
+            pdf_path = self._convert_pptx_to_pdf(str(temp_folder))
+            if pdf_path is None:
+                return [{"error": "Failed to convert PowerPoint to PDF"}]
+            
+            self.temp_pdf_path = pdf_path
+            
+            # Use PDFProcessor to OCR the generated PDF
+            pdf_processor = PDFProcessor(pdf_path)
+            ocr_results = await pdf_processor.run()
+            
+            return ocr_results
+            
         except Exception as e:
             print(f"PowerPoint processing error: {e}")
             return [{"error": str(e)}]
         finally:
-            # Clean up temporary PDF file if still exists (usually unnecessary now)
+            # Clean up temporary PDF file
             if self.temp_pdf_path and self.temp_pdf_path.exists():
                 try:
                     self.temp_pdf_path.unlink()
                     print(f"Deleted temporary PDF: {self.temp_pdf_path}")
                 except Exception as e:
                     print(f"Could not delete temporary PDF: {e}")
+
+
+# Legacy function compatibility (optional)
+# def convert_pptx_to_pdf(pptx_path, output_folder, pdf_name=None):
+#     """Legacy function for backward compatibility"""
+#     processor = PowerPointProcessor(pptx_path)
+#     return processor._convert_pptx_to_pdf(output_folder, pdf_name) is not None

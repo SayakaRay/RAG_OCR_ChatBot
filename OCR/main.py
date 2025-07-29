@@ -10,14 +10,11 @@ from OCR.powerpoint_processor import PowerPointProcessor
 from OCR.image_processor import ImageProcessor
 from OCR.image_manager import ImageManager
 from OCR.storage import S3Storage
-from OCR.markdown_utils import replace_image_links, render_with_s3
-from OCR.chat_assistant import ChatAssistant
+import traceback
 import json
-# PDF_PATH = Path("horce_test_table.pdf")
 
 def preview_markdown_in_terminal(md_text, get_binary_fn):
     print("\n=========== 📄 MARKDOWN RESPONSE ===========\n")
-    # พิมพ์ markdown แบบ raw (แทนการใช้ display())
     print(md_text)
 
     print("\n=========== 🖼️ IMAGE PREVIEW ===========\n")
@@ -36,110 +33,74 @@ def preview_markdown_in_terminal(md_text, get_binary_fn):
             print(f"Failed to preview image: {fname} — {e}")
 
 async def pipeline(FILE_PATH, filetype, username, project_id):
+    try:
+        # Select processor based on file type
+        if filetype == "pdf":
+            processor = PDFProcessor(FILE_PATH)
+        elif filetype == "pptx":
+            processor = PowerPointProcessor(FILE_PATH)
+        elif filetype in ["jpg", "jpeg", "png"]:
+            processor = ImageProcessor(FILE_PATH)
+        else:
+            raise ValueError(f"Unsupported file type: {filetype}")
 
-    if filetype == "pdf":
-        pdf_proc = PDFProcessor(FILE_PATH)
-        ocr_results = await pdf_proc.run()
+        # OCR TIMEEEEEEEEEEE
+        try:
+            ocr_results = await processor.run()
+        except Exception as e:
+            print(f"❌ OCR processing failed: {e}")
+            traceback.print_exc()
+            return
 
+        # Init storage + image manager
+        try:
+            storage = S3Storage(Settings.AWS_ACCESS, Settings.AWS_SECRET, Settings.AWS_BUCKET, Settings.AWS_REGION)
+            img_mgr = ImageManager(storage)
+        except Exception as e:
+            print(f"❌ Failed to initialize S3/ImageManager: {e}")
+            return
 
-        storage = S3Storage(Settings.AWS_ACCESS, Settings.AWS_SECRET,
-                            Settings.AWS_BUCKET, Settings.AWS_REGION)
-        img_mgr  = ImageManager(storage)
-
+        # Process OCR results and replace image tags
         full_md = []
         for resp in ocr_results:
-            for page in resp["pages"]:
-                md = page["markdown"]
-                img_tags = re.findall(r'!\[img-\d+\.jpeg\]\(img-\d+\.jpeg\)', md)
-                for idx, (img, old_tag) in enumerate(zip(page["images"], img_tags)):
-                    local_path = img_mgr.save_local(img["image_base64"])
-                    annotation = json.loads(img["image_annotation"])
-                    description = annotation["description"]
+            for page in resp.get("pages", []):
+                try:
+                    md = page.get("markdown", "")
+                    images = page.get("images", [])
+                    img_tags = re.findall(r'!\[img-\d+\.jpeg\]\(img-\d+\.jpeg\)', md)
 
-                    new_tag = f"![Image: {local_path.name}]({local_path.name}){description}"
-                    md = md.replace(old_tag, new_tag)
-                full_md.append(md)
+                    for img, old_tag in zip(images, img_tags):
+                        local_path = img_mgr.save_local(img["image_base64"])
+                        annotation = json.loads(img["image_annotation"])
+                        description = annotation.get("description", "")
+                        new_tag = f"![Image: {local_path.name}]({local_path.name}){description}"
+                        md = md.replace(old_tag, new_tag)
 
-        output_path = Path(__file__).parent.parent / "text_document" / "all_pdf.txt"
-        output_path.write_text("\n\n".join(full_md), encoding="utf-8")
+                    full_md.append(md)
+                except Exception as e:
+                    print(f"⚠️ Error processing OCR page: {e}")
+                    continue
 
+        # Save markdown output
+        try:
+            output_path = Path(__file__).parent.parent / "text_document" / "ocr_output.txt"
+            output_path.write_text("\n\n".join(full_md), encoding="utf-8")
+        except Exception as e:
+            print(f"❌ Failed to save markdown to file: {e}")
+            return
 
-        uploaded_ids = img_mgr.upload_folder(username, project_id)
-        print(f"Uploaded {len(uploaded_ids)} images to S3")
-    
-    elif filetype == "pptx":
-        # print("PPTX processing is not implemented yet.")
-        pptx_proc = PowerPointProcessor(FILE_PATH)
-        ocr_results = await pptx_proc.run()
+        # Upload images to S3
+        try:
+            uploaded_ids = img_mgr.upload_folder(username, project_id)
+            print(f"✅ Uploaded {len(uploaded_ids)} images to S3")
+        except Exception as e:
+            print(f"❌ Failed to upload images to S3: {e}")
+            return
 
+    except Exception as e:
+        print(f"❌ Pipeline failed: {e}")
+        traceback.print_exc()
 
-        storage = S3Storage(Settings.AWS_ACCESS, Settings.AWS_SECRET,
-                            Settings.AWS_BUCKET, Settings.AWS_REGION)
-        img_mgr  = ImageManager(storage)
-
-        full_md = []
-        for resp in ocr_results:
-            for page in resp["pages"]:
-                md = page["markdown"]
-                img_tags = re.findall(r'!\[img-\d+\.jpeg\]\(img-\d+\.jpeg\)', md)
-                for idx, (img, old_tag) in enumerate(zip(page["images"], img_tags)):
-                    local_path = img_mgr.save_local(img["image_base64"])
-                    annotation = json.loads(img["image_annotation"])
-                    description = annotation["description"]
-
-                    new_tag = f"![Image: {local_path.name}]({local_path.name}){description}"
-                    md = md.replace(old_tag, new_tag)
-                full_md.append(md)
-
-        output_path = Path(__file__).parent.parent / "text_document" / "all_pdf.txt"
-        output_path.write_text("\n\n".join(full_md), encoding="utf-8")
-
-
-        uploaded_ids = img_mgr.upload_folder(username, project_id)
-        print(f"Uploaded {len(uploaded_ids)} images to S3")
-
-    elif filetype in ['jpg', 'jpeg', 'png']:
-        img_proc = ImageProcessor(FILE_PATH)
-        ocr_results = await img_proc.run()
-
-        storage = S3Storage(Settings.AWS_ACCESS, Settings.AWS_SECRET,
-                            Settings.AWS_BUCKET, Settings.AWS_REGION)
-        img_mgr = ImageManager(storage)
-
-        full_md = []
-        for resp in ocr_results:
-            for page in resp["pages"]:
-                md = page["markdown"]
-                img_tags = re.findall(r'!\[img-\d+\.jpeg\]\(img-\d+\.jpeg\)', md)
-                for idx, (img, old_tag) in enumerate(zip(page["images"], img_tags)):
-                    local_path = img_mgr.save_local(img["image_base64"])
-                    annotation = json.loads(img["image_annotation"])
-                    description = annotation["description"]
-
-                    new_tag = f"![Image: {local_path.name}]({local_path.name}){description}"
-                    md = md.replace(old_tag, new_tag)
-                full_md.append(md)
-
-        output_path = Path(__file__).parent.parent / "text_document" / "all_pdf.txt"
-        output_path.write_text("\n\n".join(full_md), encoding="utf-8")
-
-        uploaded_ids = img_mgr.upload_folder(username, project_id)
-        print(f"Uploaded {len(uploaded_ids)} images to S3")
-
-    # assistant = ChatAssistant()
-    # answer_md = assistant.ask("\n\n".join(full_md),
-    #                           "อธิบาย flow การผลิตโซเดียมไฮดรอกไซด์มีรูปประกอบด้วย")
-
-    # #สำหรับ display จริงบน ipynb หรือเว็บแอป
-    # render_with_s3(answer_md, storage)
-
-
-    # #สำหรับ ทดสอบดูผลลัพธ์ชั่วคราว
-    # # ยืนยันว่า markdown + รูปมัน "มาจริง" ผ่าน terminal
-    # preview_markdown_in_terminal(
-    #     answer_md,
-    #     lambda image_id: storage.get_image_binary(image_id)
-    # )
 
 # if __name__ == "__main__":
 #     asyncio.run(pipeline(PDF_PATH))

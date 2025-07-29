@@ -2,7 +2,6 @@ import base64, uuid, datetime
 from pathlib import Path
 from typing import Iterable
 from tqdm import tqdm
-import os
 
 from OCR.config import IMAGE_DIR
 from OCR.storage import S3Storage
@@ -11,13 +10,6 @@ class ImageManager:
     def __init__(self, storage: S3Storage):
         self.storage = storage
         IMAGE_DIR.mkdir(exist_ok=True)
-        # Clear old pictures
-        for file in IMAGE_DIR.iterdir():
-            if file.is_file():
-                try:
-                    file.unlink()
-                except Exception as e:
-                    print(f"Failed to delete {file}: {e}")
 
     @staticmethod
     def _gen_name(ext="jpg") -> str:
