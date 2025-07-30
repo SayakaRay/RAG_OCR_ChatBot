@@ -1,0 +1,2 @@
+# This file ensures the evaluate data directory is tracked by Git
+# Evaluation data files are ignored but this directory structure is preserved

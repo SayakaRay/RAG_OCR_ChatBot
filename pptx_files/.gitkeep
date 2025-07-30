@@ -1,0 +1,2 @@
+# This file ensures the pptx_files directory is tracked by Git
+# Uploaded PowerPoint files are ignored but this directory structure is preserved

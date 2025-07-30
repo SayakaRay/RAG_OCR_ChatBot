@@ -1,0 +1,2 @@
+# This file ensures the test_files directory is tracked by Git
+# Test files with sensitive data are ignored but this directory structure is preserved
