@@ -49,14 +49,22 @@ def recursive_chunk(text, max_words=256, overlap_words=60):
     return final_chunks
 
 def split_text_with_langchain(text: str, chunk_size: int = 1024, chunk_overlap: int = 200):
+    """
+    แบ่งข้อความเป็นชิ้นๆ (chunks) และกรองเอาชิ้นส่วนที่ไม่มีเนื้อหาออกไป
+    """
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         separators=["\n\n", "\n", " ", ""],
         length_function=len,
     )
-    chunks = text_splitter.split_text(text)
-    return chunks
+    chunks_raw = text_splitter.split_text(text)
+    
+    # กรอง chunk ที่ไม่ถูกต้อง (ว่างเปล่า หรือมีแต่เว้นวรรค)
+    final_chunks = [chunk for chunk in chunks_raw if chunk and chunk.strip()]
+    
+    print(f"[Chunker] Initial chunks: {len(chunks_raw)}, Valid chunks after filtering: {len(final_chunks)}")
+    return final_chunks
 
 if __name__ == "__main__":
     with open("./text_document/thai_paper.txt", "r", encoding="utf-8") as f:

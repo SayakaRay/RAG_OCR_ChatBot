@@ -15,6 +15,7 @@ class Settings:
     # OCR & LLM
     MISTRAL_KEY  = os.getenv("MISTRAL_API_KEY")
     OPENAI_KEY   = os.getenv("GPT_4O_MINI")
+    TYPHOON_API_KEY = os.getenv("TYPHOON_API_KEY")
 
     # AWS
     AWS_ACCESS   = os.getenv("AWS_ACCESS_KEY")

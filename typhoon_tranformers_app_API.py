@@ -1,374 +1,106 @@
-# typhoon_tranformers_app_API.py (เวอร์ชันแปลง HTML)
+# typhoon_tranformers_app_API.py (เวอร์ชันสุดท้าย: AI-Guided Cropping)
 
-# --- 1. Imports ---
 import base64
 import json
 import os
-import re
-import random
-import subprocess
-import tempfile
-from dataclasses import dataclass
+from typing import Tuple, Any
 from io import BytesIO
-from typing import List, Literal, Callable
 
-# ไลบรารีสำหรับโหลดไฟล์ .env
 from dotenv import load_dotenv
-
-import ftfy
 from openai import OpenAI
 from PIL import Image
-from pypdf import PdfReader
-from pypdf.generic import RectangleObject
-from bs4 import BeautifulSoup # <-- ไลบรารีสำหรับแปลง HTML
+import fitz  # PyMuPDF
 
-# --- 2. Load Environment Variables & API Configuration ---
 load_dotenv()
 TYPHOON_API_KEY = os.getenv("TYPHOON_API_KEY")
-TYPHOON_BASE_URL = "https://api.opentyphoon.ai/v1"
+TYPHOON_BASE_URL = os.getenv("TYPHOON_BASE_URL", "api.opentyphoon.ai/v1")
+if not TYPHOON_BASE_URL.startswith(("http://", "https://")):
+    TYPHOON_BASE_URL = "https://" + TYPHOON_BASE_URL
 
+# --- Prompt ใหม่ล่าสุด: สั่งให้ AI หาพิกัดของรูปภาพและคืนค่าเป็น JSON ---
+PROMPT_AI_GUIDED_CROPPING = (
+    "You are an expert document analysis system. Your task is to do two things:\n"
+    "1. Reconstruct the document in the image into clean Markdown format. All tables must be plain text Markdown.\n"
+    "2. Identify all figures or images in the document. For each figure, determine its bounding box [x1, y1, x2, y2] relative to the image dimensions.\n"
+    "Your final output MUST be a single JSON object with two keys:\n"
+    "- 'markdown_text': A string containing the full reconstructed markdown content. The figure captions should be included in this text.\n"
+    "- 'figures': A list of objects, where each object has a 'caption' string (the full text of the figure's caption) and a 'bbox' list of 4 numbers [x1, y1, x2, y2].\n"
+    "If no figures are found, return an empty list for the 'figures' key."
+)
 
-# --- 3. Data Classes for PDF Structure ---
-@dataclass(frozen=True)
-class Element:
-    pass
-
-@dataclass(frozen=True)
-class BoundingBox:
-    x0: float
-    y0: float
-    x1: float
-    y1: float
-
-    @staticmethod
-    def from_rectangle(rect: RectangleObject) -> "BoundingBox":
-        return BoundingBox(rect[0], rect[1], rect[2], rect[3])
-
-@dataclass(frozen=True)
-class TextElement(Element):
-    text: str
-    x: float
-    y: float
-
-@dataclass(frozen=True)
-class ImageElement(Element):
-    name: str
-    bbox: BoundingBox
-
-@dataclass(frozen=True)
-class PageReport:
-    mediabox: BoundingBox
-    text_elements: List[TextElement]
-    image_elements: List[ImageElement]
-
-
-# --- ฟังก์ชันใหม่: แปลงตาราง HTML เป็น Markdown ---
-def convert_html_tables_to_markdown(html_content: str) -> str:
-    """
-    ค้นหาตาราง HTML ทั้งหมดในข้อความและแปลงให้เป็นรูปแบบ Markdown (plain text)
-    """
-    if '<table>' not in html_content:
-        return html_content
-
-    soup = BeautifulSoup(html_content, 'lxml')
+# --- ฟังก์ชันหลักในการประมวลผล ---
+def process_pdf_via_api(pdf_path: str, page_num: int, task_type: str = "structure") -> Tuple[Any, str]:
+    print(f"\n{'='*20} Processing Page {page_num} of PDF: {os.path.basename(pdf_path)} {'='*20}")
     
-    for table in soup.find_all('table'):
-        markdown_table = ""
-        # ส่วนหัวของตาราง (Header)
-        headers = [th.get_text(strip=True) for th in table.find_all('th')]
-        if not headers: # ถ้าไม่มี <th> ให้ใช้ <td> แถวแรกแทน
-             headers = [td.get_text(strip=True) for td in table.find('tr').find_all('td')] if table.find('tr') else []
-
-        if headers:
-            markdown_table += "| " + " | ".join(headers) + " |\n"
-            markdown_table += "| " + " | ".join(['---'] * len(headers)) + " |\n"
-
-        # ส่วนเนื้อหาของตาราง (Body)
-        rows = table.find_all('tr')
-        # ถ้ามี header แล้ว ให้ข้ามแถวแรกไป
-        start_row = 1 if headers and table.find_all('th') else 0
-
-        for row in rows[start_row:]:
-            columns = [td.get_text(strip=True) for td in row.find_all('td')]
-            markdown_table += "| " + " | ".join(columns) + " |\n"
-
-        # แทนที่แท็ก <table> เดิมด้วย Markdown ที่สร้างขึ้น
-        table.replace_with(markdown_table)
-
-    # แปลง object ของ soup กลับมาเป็น string ที่สมบูรณ์
-    return str(soup)
-
-
-# --- 4. PDF and Image Processing Utilities (from olmocr) ---
-def image_to_pdf(image_path):
     try:
-        img = Image.open(image_path)
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-            filename = tmp.name
-            if img.mode != "RGB":
-                img = img.convert("RGB")
-            img.save(filename, "PDF")
-            return filename
-    except Exception as conv_err:
-        print(f"Error converting image to PDF: {conv_err}")
-        return None
+        # Step 1: เตรียมไฟล์ภาพต้นฉบับสำหรับ AI และสำหรับการ Crop
+        with fitz.open(pdf_path) as doc:
+            page = doc.load_page(page_num - 1)
+            pix = page.get_pixmap(dpi=300) # ใช้ DPI สูงเพื่อให้ AI เห็นรายละเอียดชัดเจน
+            page_image_bytes = pix.tobytes("png")
+            page_image_base64 = base64.b64encode(page_image_bytes).decode("utf-8")
+            original_pil_image = Image.open(BytesIO(page_image_bytes))
 
-def get_pdf_media_box_width_height(local_pdf_path: str, page_num: int) -> tuple[float, float]:
-    command = ["pdfinfo", "-f", str(page_num), "-l", str(page_num), "-box", "-enc", "UTF-8", local_pdf_path]
-    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if result.returncode != 0:
-        raise ValueError(f"Error running pdfinfo: {result.stderr}")
-    output = result.stdout
-    for line in output.splitlines():
-        if "MediaBox" in line:
-            media_box_str: List[str] = line.split(":")[1].strip().split()
-            media_box: List[float] = [float(x) for x in media_box_str]
-            return abs(media_box[0] - media_box[2]), abs(media_box[3] - media_box[1])
-    raise ValueError("MediaBox not found in the PDF info.")
-
-def render_pdf_to_base64png(local_pdf_path: str, page_num: int, target_longest_image_dim: int = 2048) -> str:
-    longest_dim = max(get_pdf_media_box_width_height(local_pdf_path, page_num))
-    pdftoppm_result = subprocess.run(
-        [
-            "pdftoppm", "-png", "-f", str(page_num), "-l", str(page_num),
-            "-r", str(target_longest_image_dim * 72 / longest_dim),
-            local_pdf_path,
-        ],
-        timeout=120, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-    )
-    assert pdftoppm_result.returncode == 0, pdftoppm_result.stderr
-    return base64.b64encode(pdftoppm_result.stdout).decode("utf-8")
-
-def _cleanup_element_text(element_text: str) -> str:
-    MAX_TEXT_ELEMENT_LENGTH = 250
-    TEXT_REPLACEMENTS = {"[": "\\[", "]": "\\]", "\n": "\\n", "\r": "\\r", "\t": "\\t"}
-    text_replacement_pattern = re.compile("|".join(re.escape(key) for key in TEXT_REPLACEMENTS.keys()))
-    element_text = ftfy.fix_text(element_text).strip()
-    element_text = text_replacement_pattern.sub(lambda match: TEXT_REPLACEMENTS[match.group(0)], element_text)
-    if len(element_text) > MAX_TEXT_ELEMENT_LENGTH:
-        head_length = MAX_TEXT_ELEMENT_LENGTH // 2 - 3
-        tail_length = head_length
-        head = element_text[:head_length].rsplit(" ", 1)[0] or element_text[:head_length]
-        tail = element_text[-tail_length:].split(" ", 1)[-1] or element_text[-tail_length:]
-        return f"{head} ... {tail}"
-    return element_text
-
-def _merge_image_elements(images: List[ImageElement], tolerance: float = 0.5) -> List[ImageElement]:
-    if not images: return []
-    n = len(images)
-    parent = list(range(n))
-    def find(i):
-        if parent[i] == i: return i
-        parent[i] = find(parent[i])
-        return parent[i]
-    def union(i, j):
-        root_i, root_j = find(i), find(j)
-        if root_i != root_j: parent[root_j] = root_i
-    def bboxes_overlap(b1: BoundingBox, b2: BoundingBox) -> bool:
-        return (max(b1.x0, b2.x0) - min(b1.x1, b2.x1) <= tolerance and
-                max(b1.y0, b2.y0) - min(b1.y1, b2.y1) <= tolerance)
-    for i in range(n):
-        for j in range(i + 1, n):
-            if bboxes_overlap(images[i].bbox, images[j].bbox):
-                union(i, j)
-    groups: dict[int, list[int]] = {}
-    for i in range(n):
-        root = find(i)
-        groups.setdefault(root, []).append(i)
-    merged_images = []
-    for indices in groups.values():
-        merged_bbox = images[indices[0]].bbox
-        for idx in indices[1:]:
-            bbox = images[idx].bbox
-            merged_bbox = BoundingBox(
-                x0=min(merged_bbox.x0, bbox.x0), y0=min(merged_bbox.y0, bbox.y0),
-                x1=max(merged_bbox.x1, bbox.x1), y1=max(merged_bbox.y1, bbox.y1),
-            )
-        merged_images.append(ImageElement(name="+".join(images[i].name for i in indices), bbox=merged_bbox))
-    return merged_images
-
-def _linearize_pdf_report(report: PageReport, max_length: int = 4000) -> str:
-    result = f"Page dimensions: {report.mediabox.x1:.1f}x{report.mediabox.y1:.1f}\n"
-    if max_length < 20: return result
-    images = _merge_image_elements(report.image_elements)
-    all_elements = []
-    for element in images:
-        s = f"[Image {element.bbox.x0:.0f}x{element.bbox.y0:.0f} to {element.bbox.x1:.0f}x{element.bbox.y1:.0f}]\n"
-        all_elements.append(((element.bbox.y0, element.bbox.x0), s))
-    for element in report.text_elements:
-        if len(element.text.strip()) == 0: continue
-        element_text = _cleanup_element_text(element.text)
-        s = f"[{element.x:.0f}x{element.y:.0f}]{element_text}\n"
-        all_elements.append(((element.y, element.x), s))
-    
-    all_elements.sort(key=lambda x: x[0])
-    
-    for _, s in all_elements:
-        if len(result) + len(s) > max_length:
-            break
-        result += s
-    return result
-
-def _pdf_report(local_pdf_path: str, page_num: int) -> PageReport:
-    reader = PdfReader(local_pdf_path)
-    page = reader.pages[page_num - 1]
-    text_elements, image_elements = [], []
-    def visitor_body(text, cm, tm, font_dict, font_size):
-        if text.strip():
-            text_elements.append(TextElement(text, tm[4], tm[5]))
-    page.extract_text(visitor_text=visitor_body)
-    return PageReport(
-        mediabox=BoundingBox.from_rectangle(page.mediabox),
-        text_elements=text_elements,
-        image_elements=[],
-    )
-
-def get_anchor_text(local_pdf_path: str, page: int, pdf_engine: str, target_length: int = 4000) -> str:
-    assert page > 0, "Pages are 1-indexed"
-    if pdf_engine == "pdfreport":
-        return _linearize_pdf_report(_pdf_report(local_pdf_path, page), max_length=target_length)
-    else:
-        raise NotImplementedError(f"Unknown engine: {pdf_engine}")
-
-
-# --- 5. Prompt Generation Logic ---
-PROMPTS_SYS = {
-    "default": lambda base_text: (
-        f"Below is an image of a document page along with its dimensions. "
-        f"Simply return the markdown representation of this document, presenting tables in markdown format as they naturally appear.\n"
-        f"If the document contains images, use a placeholder like dummy.png for each image.\n"
-        f"Your final output must be in JSON format with a single key `natural_text` containing the response.\n"
-        f"RAW_TEXT_START\n{base_text}\nRAW_TEXT_END"
-    ),
-    "structure": lambda base_text: (
-        f"Below is an image of a document page, along with its dimensions and possibly some raw textual content previously extracted from it. "
-        f"Note that the text extraction may be incomplete or partially missing. Carefully consider both the layout and any available text to reconstruct the document accurately.\n"
-        f"Your task is to return the markdown representation of this document, presenting tables in plain text Markdown format (using pipes | and hyphens -) as they naturally appear.\n"
-        f"If the document contains images or figures, analyze them and include the tag <figure>IMAGE_ANALYSIS</figure> in the appropriate location.\n"
-        f"Your final output must be in JSON format with a single key `natural_text` containing the response.\n"
-        f"RAW_TEXT_START\n{base_text}\nRAW_TEXT_END"
-    ),
-}
-
-def get_prompt(prompt_name: str) -> Callable[[str], str]:
-    return PROMPTS_SYS.get(prompt_name, lambda x: "Invalid PROMPT_NAME provided.")
-
-
-# --- 6. Main Processing Function (API Call) ---
-def process_pdf_via_api(pdf_or_image_file: str, page_num: int, task_type: str):
-    if pdf_or_image_file is None:
-        return None, "No file provided"
-    
-    if not os.path.exists(pdf_or_image_file):
-         return None, f"File not found: {pdf_or_image_file}"
-
-    print(f"Processing file: {pdf_or_image_file}...")
-    temp_pdf_created = False
-    filename = pdf_or_image_file
-
-    if not filename.lower().endswith(".pdf"):
-        print("Input is an image, converting to temporary PDF...")
-        filename = image_to_pdf(pdf_or_image_file)
-        if filename is None:
-            return None, "Error converting image to PDF"
-        temp_pdf_created = True
-
-    try:
-        print(f"Rendering page {page_num} to image...")
-        image_base64 = render_pdf_to_base64png(filename, page_num, target_longest_image_dim=1800)
-        image_pil = Image.open(BytesIO(base64.b64decode(image_base64)))
-
-        print("Extracting anchor text from PDF structure...")
-        anchor_text = get_anchor_text(filename, page_num, pdf_engine="pdfreport", target_length=8000)
-
-        prompt_template_fn = get_prompt(task_type)
-        prompt = prompt_template_fn(anchor_text)
-
-        messages = [{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}},
-            ],
-        }]
+        # Step 2: เรียก API ด้วย Prompt ใหม่เพียงครั้งเดียว
+        print("🚀 Sending full page to API for combined analysis (Text + Figure BBoxes)...")
+        messages = [{"role": "user", "content": [{"type": "text", "text": PROMPT_AI_GUIDED_CROPPING}, {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{page_image_base64}"}}]}]
         
-        print("Sending request to Typhoon API...")
         openai = OpenAI(base_url=TYPHOON_BASE_URL, api_key=TYPHOON_API_KEY)
-        response = openai.chat.completions.create(
-            model="typhoon-ocr-preview",
-            messages=messages,
-            max_tokens=4096,
-            extra_body={
-                "repetition_penalty": 1.2,
-                "temperature": 0.1,
-                "top_p": 0.6,
-            },
-        )
+        response = openai.chat.completions.create(model="typhoon-ocr-preview", messages=messages, max_tokens=4096,
+            response_format={"type": "json_object"}) # บังคับให้ AI ตอบกลับเป็น JSON
+        
         text_output = response.choices[0].message.content
-        print("API response received.")
-
-        markdown_out = ""
-        try:
-            if text_output and text_output.strip():
-                json_data = json.loads(text_output)
-                natural_text = json_data.get('natural_text', "")
-                
-                # --- เรียกใช้ฟังก์ชันแปลง HTML ที่นี่ ---
-                markdown_out = convert_html_tables_to_markdown(natural_text)
-
-            else:
-                print("⚠️ API response is empty.")
-        except (json.JSONDecodeError, AttributeError) as e:
-            print(f"⚠️ Could not parse JSON from output: {e}. Returning raw text instead.")
-            markdown_out = f"⚠️ Could not extract `natural_text` from output.\nRaw output:\n{text_output}"
-
-        if not markdown_out:
-            print("⚠️ Warning: Final markdown content is empty after processing.")
-
-        return image_pil, markdown_out
-
-    finally:
-        if temp_pdf_created and os.path.exists(filename):
-            print(f"Cleaning up temporary file: {filename}")
-            os.remove(filename)
-
-
-# --- 7. Execution Block ---
-if __name__ == "__main__":
-    # ตรวจสอบว่ามี API Key ใน environment หรือไม่
-    if not TYPHOON_API_KEY:
-        print("❌ Error: ไม่พบ TYPHOON_API_KEY")
-        print("กรุณาสร้างไฟล์ .env และเพิ่ม 'TYPHOON_API_KEY=YOUR_KEY' ลงในไฟล์")
-    else:
-        # --- กำหนดค่า ที่นี่ ---
-        # ระบุชื่อไฟล์รูปภาพหรือ PDF ของคุณ
-        input_file = "/home/sayakaray/ByteDance_Dolphin/Dolphin_copy/examples/00002089.pdf" 
-        page_to_process = 1
-        task = "structure"
-        # ----------------------
-
-        image_result, markdown_result = process_pdf_via_api(
-            pdf_or_image_file=input_file,
-            page_num=page_to_process,
-            task_type=task
-        )
-
-        if markdown_result:
-            print("\n--- OCR Result ---")
-            print(markdown_result)
-            
-            output_folder = 'ocr_results'
-            base_name = os.path.splitext(os.path.basename(input_file))[0]
-            output_filename = f'{base_name}_page_{page_to_process}.txt'
-            full_path = os.path.join(output_folder, output_filename)
-            
-            os.makedirs(output_folder, exist_ok=True)
-            
+        
+        # Step 3: ประมวลผลผลลัพธ์ JSON
+        final_markdown = ""
+        if text_output and text_output.strip():
+            print("✅ Received structured JSON response from API.")
             try:
-                with open(full_path, 'w', encoding='utf-8') as f:
-                    f.write(markdown_result)
-                print(f"\n✅ บันทึกไฟล์เรียบร้อยที่: {full_path}")
+                response_data = json.loads(text_output)
+                final_markdown = response_data.get('markdown_text', '')
+                figures_to_embed = response_data.get('figures', [])
+                
+                print(f"🔎 AI identified {len(figures_to_embed)} figures to embed.")
+
+                # Step 4: วนลูปเพื่อ Crop และแทนที่รูปภาพตามพิกัดที่ AI ให้มา
+                for figure in figures_to_embed:
+                    caption = figure.get('caption', 'Extracted Figure')
+                    bbox = figure.get('bbox')
+
+                    if not isinstance(bbox, list) or len(bbox) != 4:
+                        print(f"⚠️ Skipping figure with invalid BBox: {bbox}")
+                        continue
+                    
+                    # Crop รูปจาก PIL Image ที่เราเก็บไว้
+                    cropped_image = original_pil_image.crop(tuple(bbox))
+                    
+                    # เข้ารหัสเป็น Base64
+                    buffered = BytesIO()
+                    cropped_image.save(buffered, format="PNG")
+                    base64_data = base64.b64encode(buffered.getvalue()).decode('utf-8')
+                    image_data_url = f"data:image/png;base64,{base64_data}"
+                    
+                    final_tag = f"![{caption}]({image_data_url})"
+                    # แทนที่ข้อความ caption เดิมใน Markdown ด้วยแท็กรูปภาพ
+                    if caption in final_markdown:
+                        final_markdown = final_markdown.replace(caption, final_tag, 1)
+                        print(f"✅ Embedded figure for caption: '{caption[:30]}...'")
+                    else:
+                        print(f"⚠️ Caption '{caption[:30]}...' not found in markdown_text. Appending image to the end.")
+                        final_markdown += "\n\n" + final_tag
+
+            except json.JSONDecodeError:
+                print("⚠️ API did not return a valid JSON. Using raw output.")
+                final_markdown = text_output
             except Exception as e:
-                print(f"\n❌ เกิดข้อผิดพลาดในการบันทึกไฟล์: {e}")
+                print(f"❌ Error during embedding process: {e}")
+                final_markdown = response_data.get('markdown_text', text_output)
         else:
-            print(f"Could not process the file '{input_file}'.")
+            print("⚠️ API response is empty.")
+            
+        return None, final_markdown
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return None, f"An error occurred: {e}"
