@@ -11,6 +11,12 @@ This repository contains a **Retrieval-Augmented Generation (RAG)** system built
 pip install -r requirements.txt
 ```
 
+* Surya OCR Model
+
+```bash
+pip install surya-ocr
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+```
 ## 🚀 Getting Started
 
 ### 1. Backend Server (FastAPI + RAG)
@@ -50,7 +56,7 @@ This script uses `load_spilt_file.py` to process PDF files using your custom OCR
 Create a `.env` file in the project root with the following content:
 
 ```dotenv
-MISTRAL_API_KEY=your_mistral_api_key_here
+GOOGLE_API_KEY=your_google_vision_api_key_here
 OPENAI_API_KEY=your_openai_api_key_here
 AWS_ACCESS_KEY=your_aws_access_key_here
 AWS_BUCKET_NAME=your_bucket_name_here

@@ -1,9 +1,14 @@
+# storage.py
+
 import boto3
+
 class S3Storage:
-    def __init__(self, access, secret, bucket, region):
+    def __init__(self, access, secret, bucket):
         self.bucket = bucket
         self.s3 = boto3.client(
-            's3', aws_access_key_id=access, aws_secret_access_key=secret, region_name=region
+            's3', 
+            aws_access_key_id=access, 
+            aws_secret_access_key=secret
         )
 
     def upload_file(self, binary: bytes, image_id: str, username: str, project_id: str):
@@ -21,8 +26,9 @@ class S3Storage:
         return r['Body'].read()
 
     def presigned_url(self, image_id: str, username: str, project_id: str, expires=3600):
+        key = f'username/{username}/projects/{project_id}/images/{image_id}.jpg'
         return self.s3.generate_presigned_url(
             'get_object',
-            Params={'Bucket': self.bucket, 'Key': f'username/{username}/projects/{project_id}/images/{image_id}.jpg'},
+            Params={'Bucket': self.bucket, 'Key': key},
             ExpiresIn=expires
         )
